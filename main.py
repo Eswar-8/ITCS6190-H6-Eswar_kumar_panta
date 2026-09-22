@@ -40,7 +40,11 @@ def save(df, name):
 #
 # TODO: write the schema of listening_logs.csv as a StructType with four fields:
 #   user_id STRING, song_id STRING, timestamp TIMESTAMP, duration_sec INT
-logs_schema = None
+logs_schema = StructType([
+    StructField("user_id", StringType(), True),
+    StructField("song_id", StringType(), True),
+    StructField("timestamp", TimestampType(), True),
+    StructField("duration_sec", IntegerType(), True)])
 
 # The schema of songs_metadata.csv, as a DDL string (the other form from the slides).
 songs_schema = "song_id STRING, title STRING, artist STRING, genre STRING, mood STRING"
@@ -64,8 +68,17 @@ def task1_favorite_genre():
     Hint: count plays per (user_id, genre), then keep the top row per user. A window with
     row_number() over Window.partitionBy("user_id").orderBy(...) does that in one step.
     """
-    # TODO
-    return None
+     # 2. Count plays per (user_id, genre) pair
+    genre_counts = plays.groupBy("user_id", "genre").agg(count("*").alias("play_count"))
+    
+    # 3. For each user, keep only the genre with the most plays
+    #    (If tied, alphabetically first)
+    window = Window.partitionBy("user_id").orderBy(desc("play_count"), "genre")
+    ranked = genre_counts.withColumn("row_num", row_number().over(window))
+    
+    # 4. Filter to row_num == 1 (top row per user) and order by user_id
+    result = ranked.filter(col("row_num") == 1).select("user_id", "genre", "play_count").orderBy("user_id")
+    return result
 
 
 # ---------------------------------------------------------------- Task 2
@@ -75,8 +88,14 @@ def task2_average_listen_time():
     Columns: song_id, title, avg_duration_sec (rounded to 2 decimals), play_count.
     Ordered by avg_duration_sec descending.
     """
-    # TODO
-    return None
+    result = (plays
+              .groupBy("song_id", "title")
+              .agg(
+                  sround(avg("duration_sec"), 2).alias("avg_duration_sec"),
+                  count("*").alias("play_count")
+              )
+              .orderBy(desc("avg_duration_sec")))
+    return result
 
 
 # ---------------------------------------------------------------- Task 3
@@ -89,8 +108,22 @@ def task3_genre_loyalty(favorite):
     Ordered by loyalty_score descending, then total_plays descending, then user_id.
     `favorite` is the DataFrame returned by task 1; join it with the total plays per user.
     """
-    # TODO
-    return None
+    # 1. Compute total plays per user
+    total_plays_per_user = plays.groupBy("user_id").agg(count("*").alias("total_plays"))
+    
+    # 2. Join the favorite genre info with total plays
+    loyalty = (favorite
+               .join(total_plays_per_user, "user_id")
+               .withColumn("loyalty_score", 
+                          sround(col("play_count") / col("total_plays"), 3)))
+    
+    # 3. Order by loyalty_score desc, then total_plays desc, then user_id
+    #    and keep only the top 10
+    result = (loyalty
+              .orderBy(desc("loyalty_score"), desc("total_plays"), "user_id")
+              .limit(10)
+              .select("user_id", "genre", "play_count", "total_plays", "loyalty_score"))
+    return result
 
 
 # ---------------------------------------------------------------- Task 4
@@ -101,8 +134,15 @@ def task4_night_owls():
     Ordered by night_plays descending, then user_id.
     Hint: hour("timestamp") works because the column is a timestamp, not a string.
     """
-    # TODO
-    return None
+    # 1. Filter logs for night hours (0-4, where 0=midnight, 4=4AM)
+    night_logs = logs.filter((hour("timestamp") >= 0) & (hour("timestamp") <= 4))
+    
+    # 2. Count plays per user in that window
+    result = (night_logs
+              .groupBy("user_id")
+              .agg(count("*").alias("night_plays"))
+              .orderBy(desc("night_plays"), "user_id"))
+    return result
 
 
 favorite = task1_favorite_genre()
